@@ -31,7 +31,7 @@ const char* chipKind(Chip c);                        // "resistive" / "capacitiv
 void describeChip(const TouchConfig& c, char* buf, size_t n);  // e.g. "GT911 (id 911) @0x5D"
 void describePins(const TouchConfig& c, char* buf, size_t n);  // e.g. "I2C SDA=33 SCL=32 RST=25 INT=21"
 
-// Every wiring a CYD-family board is known to use; the probes and the "touch anywhere" fallback walk this list.
+// XPT2046 wirings polled live by the "touch anywhere" fallback when the passive probe finds nothing.
 int candidates(TouchConfig* out, int max);
 
 // Passive probe (no finger needed). Fills `out` with what answered; `log` (may be null) gets one line per step.

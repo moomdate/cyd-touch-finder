@@ -48,6 +48,16 @@ bool sameWiring(const TouchConfig& a, const TouchConfig& b) {
 TouchConfig wired;  // what the pins are set up for now
 bool anyWired = false, wireOn = false;
 
+// GPIO21 is the backlight on "R" boards but the touch INT *output* on "C" boards: stop driving it while an I2C
+// chip may be there (the C boards' backlight is on 27, which main.cpp drives).
+void releaseIntPin() { pinMode(I2C_INT, INPUT); }
+
+void restoreBacklight() {
+#if defined(TFT_BL)
+  if (TFT_BL == I2C_INT) { pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); }
+#endif
+}
+
 void releaseI2c() {
   if (wireOn) { Wire.end(); wireOn = false; }
 }
@@ -71,6 +81,13 @@ void setupWiring(const TouchConfig& c) {
       break;
     case Bus::I2c:
       releaseI2c();
+      releaseIntPin();
+      if (c.rst >= 0 && !(anyWired && wired.bus == Bus::I2c)) {
+        // The XPT2046 bit-bang CLK is this same GPIO and idles LOW, which holds the chip in reset.
+        pinMode(c.rst, OUTPUT);
+        digitalWrite(c.rst, HIGH);
+        delay(150);
+      }
       wireOn = Wire.begin(c.sda, c.scl, 400000);
       Wire.setTimeOut(20);
       break;
@@ -244,12 +261,19 @@ bool i2cRead(const TouchConfig& c, RawTouch& t) {
       if (z < 100) return true;
       t.x = nsRead(c.addr, 0xC0);
       t.y = nsRead(c.addr, 0xD0);
-      t.down = t.x > 0 && t.y > 0;
+      t.down = t.x > 40 && t.x < 4055 && t.y > 40 && t.y < 4055;  // any device at 0x48 answers; rails = not a press
       return true;
     }
     default:
       return false;
   }
+}
+
+// CST816 stops ACKing a few seconds after reset until touched; 0xFE (DisAutoSleep) != 0 keeps it awake.
+void disableCstSleep(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  Wire.write(0xFE); Wire.write(0x01);
+  Wire.endTransmission();
 }
 
 void logf(Log log, const char* fmt, ...) {
@@ -273,7 +297,8 @@ void resetI2cChip() {
 
 int probeI2c(TouchConfig* out, int max, Log log) {
   int n = 0;
-  resetI2cChip();  // also wakes a CST816 that went to sleep (it then stops ACKing until touched)
+  releaseIntPin();  // before the reset: GT911 picks its address from the INT level
+  resetI2cChip();   // also wakes a CST816 that went to sleep (it then stops ACKing until touched)
   TouchConfig base = i2cBase(Chip::None, 0);
   anyWired = false;
   setupWiring(base);
@@ -288,6 +313,7 @@ int probeI2c(TouchConfig* out, int max, Log log) {
       c = i2cBase(Chip::Cst8xx, a);
       rd8(a, 0xA7, c.id, 1);   // chip id: B4 CST816S, B5 CST816T, B6 CST816D, B7 CST820
       rd8(a, 0xA9, c.id + 1, 1);  // firmware version
+      disableCstSleep(a);
     } else if (a == ADDR_FT) {
       c = i2cBase(Chip::Ft6x36, a);
       rd8(a, 0xA3, c.id, 1);   // chip id: 06 FT6206, 36 FT6236, 64 FT6336U
@@ -364,8 +390,9 @@ void describePins(const TouchConfig& c, char* buf, size_t n) {
 }
 
 int candidates(TouchConfig* out, int max) {
-  const TouchConfig all[] = {xptBitBang(), xptShared(), i2cBase(Chip::Cst8xx, ADDR_CST), i2cBase(Chip::Ft6x36, ADDR_FT),
-                             i2cBase(Chip::Gt911, ADDR_GT_A), i2cBase(Chip::Gt911, ADDR_GT_B)};
+  // XPT2046 wirings only: I2C chips are found by the periodic re-probe. Polling both every few ms would keep
+  // resetting the I2C chip through GPIO25 (= the bit-bang CLK).
+  const TouchConfig all[] = {xptBitBang(), xptShared()};
   int n = 0;
   for (const auto& c : all)
     if (n < max) out[n++] = c;
@@ -377,6 +404,8 @@ int probeAll(TouchConfig* out, int max, Log log) {
   int n = probeI2c(out, max, log);
   releaseI2c();
   anyWired = false;
+  if (n > 0) return n;  // capacitive board: the XPT bit-bang would hold its RST (GPIO25) low
+  restoreBacklight();
 
   for (const TouchConfig& c : {xptBitBang(), xptShared()}) {
     int temp = 0;
@@ -399,7 +428,9 @@ bool present(const TouchConfig& c) {
   setupWiring(c);
   if (wireOn && ack(c.addr)) return true;
   resetI2cChip();  // a sleeping CST816 only answers after a reset or a touch
-  return ack(c.addr);
+  if (!ack(c.addr)) return false;
+  if (c.chip == Chip::Cst8xx) disableCstSleep(c.addr);
+  return true;
 }
 
 }  // namespace tf

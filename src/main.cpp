@@ -176,8 +176,8 @@ void enterWait() {
     }
   } else {
     header("No touch chip answered the probe", C_WARN);
-    text("Trying every known wiring live.", 6, y, 2, C_FG);
-    text("The row that turns green is your touch.", 6, y + 17, 2, C_FG);
+    text("Polling XPT2046 wirings; I2C re-probed every 5 s.", 6, y, 2, C_FG);
+    text("A row that turns green is your touch.", 6, y + 17, 2, C_FG);
     y += 38;
   }
   text("Press & hold anywhere", W / 2, y + 6, 4, C_ACC, TC_DATUM);
@@ -216,13 +216,6 @@ void waitTick() {
     if (streak[i] < PRESS_STREAK) continue;
 
     active = cands[i];
-    if (active.bus == tf::Bus::I2c && !candsDetected) {
-      // Found by touch alone (e.g. a CST816 that slept through the probe): re-probe to read its chip id.
-      tf::TouchConfig fresh[tf::MAX_FOUND];
-      int n = tf::probeAll(fresh, tf::MAX_FOUND, nullptr);
-      for (int k = 0; k < n; k++)
-        if (fresh[k].bus == tf::Bus::I2c && fresh[k].addr == active.addr) active = fresh[k];
-    }
     char chip[48], pins[64];
     tf::describeChip(active, chip, sizeof chip);
     tf::describePins(active, pins, sizeof pins);
@@ -237,6 +230,7 @@ void waitTick() {
     drawRows();
   }
   // Nothing answered: keep re-probing, a capacitive chip may wake up (CST816 sleeps until touched or reset).
+  // The I2C probe briefly turns the backlight off on "R" boards (GPIO21 doubles as touch INT on "C" boards).
   if (!candsDetected && logic::elapsedMs(now, lastReprobe) >= 5000) {
     lastReprobe = now;
     tf::TouchConfig fresh[tf::MAX_FOUND];
