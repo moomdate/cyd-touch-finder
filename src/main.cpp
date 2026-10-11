@@ -58,7 +58,8 @@ void shortName(const tf::TouchConfig& c, char* buf, size_t n) {
 // Persistence
 bool loadResult() {
   if (!prefs.begin(NVS_NS, true)) return false;
-  bool ok = prefs.getBytesLength("cfg") == sizeof active && prefs.getBytesLength("cal") == sizeof cal;
+  bool ok = prefs.isKey("cfg") && prefs.isKey("cal") &&  // isKey first: getBytesLength logs an error when missing
+            prefs.getBytesLength("cfg") == sizeof active && prefs.getBytesLength("cal") == sizeof cal;
   if (ok) {
     prefs.getBytes("cfg", &active, sizeof active);
     prefs.getBytes("cal", &cal, sizeof cal);
@@ -83,7 +84,7 @@ void forgetResult() {
 
 void loadInvert() {
   if (prefs.begin(NVS_NS, true)) {
-    invert = prefs.getBool("inv", true);
+    if (prefs.isKey("inv")) invert = prefs.getBool("inv", true);
     prefs.end();
   }
 }
